@@ -1,511 +1,538 @@
 #include "raylib.h"
+#include <math.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
-#include <ctype.h>
+#include <string.h>
 
-#define MAX_STUDENTS 200
+#define MAX_STUDENTS 100
+#define FILE_NAME "students.txt"
+
+// --- ENUMS & STRUCTURES ---
+typedef enum {
+    SCREEN_LOGIN = 0,
+    SCREEN_DASHBOARD
+} CurrentScreen;
 
 typedef struct {
-    char roll[20];
-    char name[60];
-    char course[40];
+    int roll;
+    char name[50];
     float marks;
 } Student;
 
+// --- GLOBAL VARIABLES ---
 Student students[MAX_STUDENTS];
 int studentCount = 0;
+
+// Font Variable
+Font customFont;
+
+// Form & State Variables
+CurrentScreen currentScreen = SCREEN_LOGIN;
+char loginUser[30] = "";
+char loginPass[30] = "";
+int activeLoginField = 0;
+char loginErrorMsg[60] = "";
+
+char rollText[10] = "";
+char nameText[50] = "";
+char marksText[10] = "";
+int activeField = 0;
 int selectedIndex = -1;
-int scrollOffset = 0;
+char statusMsg[60] = "";
+Color statusColor = (Color){ 46, 196, 182, 255 };
 
-typedef enum {
-    LIST,
-    FORM
-} Screen;
+// Cursors
+int loginUserCursor = 0;
+int loginPassCursor = 0;
+int rollCursor = 0;
+int nameCursorPos = 0;
+int marksCursor = 0;
 
-Screen currentScreen = LIST;
+// Modern UI Color Palette
+#define COLOR_BG        (Color){ 30, 30, 46, 255 }     
+#define COLOR_PANEL     (Color){ 40, 40, 60, 255 }     
+#define COLOR_ACCENT    (Color){ 0, 180, 216, 255 }    
+#define COLOR_SUCCESS   (Color){ 46, 196, 182, 255 }   
+#define COLOR_DANGER    (Color){ 230, 57, 70, 255 }    
+#define COLOR_TEXT_LIGHT (Color){ 241, 250, 238, 255 } 
+#define COLOR_TEXT_MUTED (Color){ 141, 153, 174, 255 } 
 
-int editMode = 0;
-int focusedField = -1;
+// --- FILE OPERATIONS ---
+void SaveData() {
+    FILE *fp = fopen(FILE_NAME, "w");
+    if (!fp) return;
+    for (int i = 0; i < studentCount; i++) {
+        fprintf(fp, "%d %s %.2f\n", students[i].roll, students[i].name, students[i].marks);
+    }
+    fclose(fp);
+}
 
-char formRoll[20] = "";
-char formName[60] = "";
-char formCourse[40] = "";
-char formMarks[20] = "";
-char searchText[60] = "";
-char statusMessage[100] = "Welcome! Manage your student records.";
-char formErrorMessage[100] = ""; // Form screen ke upar error dikhane ke liye
-
-float panelX = 0;
-
-// Custom Colors (Raylib conflict se bachne ke liye)
-Color CUSTOM_BG = {18, 25, 42, 255};
-Color CUSTOM_PANEL = {29, 39, 60, 255};
-Color CUSTOM_BLUE = {48, 115, 235, 255};
-Color CUSTOM_WHITE = {240, 245, 255, 255};
-Color CUSTOM_MUTED = {155, 170, 195, 255};
-Color CUSTOM_GREEN = {40, 190, 130, 255};
-Color CUSTOM_RED = {225, 75, 85, 255};
-
-// Load student records
-void LoadData(void)
-{
-    FILE *file = fopen("students.txt", "r");
-
-    if (file == NULL) return;
-
-    while (studentCount < MAX_STUDENTS &&
-        fscanf(file, " %19[^|]|%59[^|]|%39[^|]|%f",
-        students[studentCount].roll,
-        students[studentCount].name,
-        students[studentCount].course,
-        &students[studentCount].marks) == 4)
-    {
+void LoadData() {
+    FILE *fp = fopen(FILE_NAME, "r");
+    if (!fp) return;
+    studentCount = 0;
+    while (fscanf(fp, "%d %s %f", &students[studentCount].roll, students[studentCount].name, &students[studentCount].marks) == 3) {
         studentCount++;
+        if (studentCount >= MAX_STUDENTS) break;
+    }
+    fclose(fp);
+}
+
+void ResetForm() {
+    rollText[0] = '\0';
+    nameText[0] = '\0';
+    marksText[0] = '\0';
+    activeField = 0;
+    selectedIndex = -1;
+    rollCursor = 0;
+    nameCursorPos = 0;
+    marksCursor = 0;
+}
+
+int IsDuplicateRoll(int roll, int ignoreIndex) {
+    for (int i = 0; i < studentCount; i++) {
+        if (i == ignoreIndex) continue;
+        if (students[i].roll == roll) return 1;
+    }
+    return 0;
+}
+
+void InsertCharAt(char *text, int *cursor, int maxLen, char c) {
+    int len = strlen(text);
+    if (len >= maxLen - 1) return;
+    for (int i = len; i >= *cursor; i--) {
+        text[i + 1] = text[i];
+    }
+    text[*cursor] = c;
+    (*cursor)++;
+}
+
+void HandleBackspaceAt(char *text, int *cursor) {
+    int len = strlen(text);
+    if (*cursor > 0 && len > 0) {
+        for (int i = *cursor - 1; i < len; i++) {
+            text[i] = text[i + 1];
+        }
+        (*cursor)--;
+    }
+}
+
+int GetClickedCursorPos(const char *text, Rectangle box, float fontSize, float mouseX) {
+    int len = strlen(text);
+    int bestPos = 0;
+    float minDiff = 9999.0f;
+    
+    for (int i = 0; i <= len; i++) {
+        char tempSub[50];
+        strncpy(tempSub, text, i);
+        tempSub[i] = '\0';
+        float charX = box.x + 10 + MeasureTextEx(customFont, tempSub, fontSize, 1.0f).x;
+        float diff = fabsf(mouseX - charX);
+        if (diff < minDiff) {
+            minDiff = diff;
+            bestPos = i;
+        }
+    }
+    return bestPos;
+}
+
+// --- LOGIN SCREEN ---
+void HandleLoginInput() {
+    if (IsKeyPressed(KEY_TAB)) {
+        activeLoginField = (activeLoginField == 1) ? 2 : 1;
+        if (activeLoginField == 1) loginUserCursor = strlen(loginUser);
+        else loginPassCursor = strlen(loginPass);
     }
 
-    fclose(file);
+    if (activeLoginField == 1) {
+        int key = GetCharPressed();
+        while (key > 0) {
+            if ((key >= 32) && (key <= 125) && (strlen(loginUser) < 25)) {
+                InsertCharAt(loginUser, &loginUserCursor, 25, (char)key);
+            }
+            key = GetCharPressed();
+        }
+        if (IsKeyPressed(KEY_LEFT) && loginUserCursor > 0) loginUserCursor--;
+        if (IsKeyPressed(KEY_RIGHT) && loginUserCursor < strlen(loginUser)) loginUserCursor++;
+        if (IsKeyPressed(KEY_BACKSPACE)) HandleBackspaceAt(loginUser, &loginUserCursor);
+    } 
+    else if (activeLoginField == 2) {
+        int key = GetCharPressed();
+        while (key > 0) {
+            if ((key >= 32) && (key <= 125) && (strlen(loginPass) < 25)) {
+                InsertCharAt(loginPass, &loginPassCursor, 25, (char)key);
+            }
+            key = GetCharPressed();
+        }
+        if (IsKeyPressed(KEY_LEFT) && loginPassCursor > 0) loginPassCursor--;
+        if (IsKeyPressed(KEY_RIGHT) && loginPassCursor < strlen(loginPass)) loginPassCursor++;
+        if (IsKeyPressed(KEY_BACKSPACE)) HandleBackspaceAt(loginPass, &loginPassCursor);
+    }
 }
 
-// Save student records
-void SaveData(void)
-{
-    FILE *file = fopen("students.txt", "w");
+void DrawLoginScreen() {
+    Rectangle card = { 280, 100, 440, 420 };
+    DrawRectangleRounded(card, 0.08f, 4, COLOR_PANEL);
+    DrawRectangleRoundedLines(card, 0.08f, 4, COLOR_ACCENT);
 
-    if (file == NULL)
-    {
-        strcpy(statusMessage, "Error saving records!");
-        return;
+    DrawTextEx(customFont, "PORTAL LOGIN", (Vector2){ card.x + 130, card.y + 30 }, 22, 1.0f, COLOR_TEXT_LIGHT);
+    DrawLine(card.x + 40, card.y + 70, card.x + 400, card.y + 70, COLOR_TEXT_MUTED);
+
+    // Username Box
+    Rectangle userBox = { card.x + 40, card.y + 110, 360, 45 };
+    DrawTextEx(customFont, "Username:", (Vector2){ userBox.x, userBox.y - 20 }, 14, 1.0f, COLOR_TEXT_MUTED);
+    DrawRectangleRounded(userBox, 0.1f, 4, (activeLoginField == 1) ? (Color){ 50, 50, 75, 255 } : (Color){ 30, 30, 45, 255 });
+    DrawRectangleRoundedLines(userBox, 0.1f, 4, (activeLoginField == 1) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+    DrawTextEx(customFont, loginUser, (Vector2){ userBox.x + 12, userBox.y + 12 }, 18, 1.0f, COLOR_TEXT_LIGHT);
+
+    if (activeLoginField == 1) {
+        char tempSub[30];
+        strncpy(tempSub, loginUser, loginUserCursor);
+        tempSub[loginUserCursor] = '\0';
+        float w = MeasureTextEx(customFont, tempSub, 18, 1.0f).x;
+        if ((int)(GetTime() * 2) % 2 == 0) {
+            DrawLine(userBox.x + 12 + w, userBox.y + 10, userBox.x + 12 + w, userBox.y + 35, COLOR_ACCENT);
+        }
     }
 
-    for (int i = 0; i < studentCount; i++)
-    {
-        fprintf(file, "%s|%s|%s|%.2f\n",
-            students[i].roll,
-            students[i].name,
-            students[i].course,
-            students[i].marks);
+    if (CheckCollisionPointRec(GetMousePosition(), userBox) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        activeLoginField = 1;
+        loginUserCursor = GetClickedCursorPos(loginUser, userBox, 18, GetMousePosition().x);
     }
 
-    fclose(file);
+    // Password Box
+    Rectangle passBox = { card.x + 40, card.y + 190, 360, 45 };
+    DrawTextEx(customFont, "Password:", (Vector2){ passBox.x, passBox.y - 20 }, 14, 1.0f, COLOR_TEXT_MUTED);
+    DrawRectangleRounded(passBox, 0.1f, 4, (activeLoginField == 2) ? (Color){ 50, 50, 75, 255 } : (Color){ 30, 30, 45, 255 });
+    DrawRectangleRoundedLines(passBox, 0.1f, 4, (activeLoginField == 2) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+
+    char maskedPass[30] = "";
+    for (int i = 0; i < strlen(loginPass); i++) maskedPass[i] = '*';
+    maskedPass[strlen(loginPass)] = '\0';
+    DrawTextEx(customFont, maskedPass, (Vector2){ passBox.x + 12, passBox.y + 15 }, 20, 1.0f, COLOR_TEXT_LIGHT);
+
+    if (activeLoginField == 2) {
+        char tempSub[30];
+        for (int i = 0; i < loginPassCursor; i++) tempSub[i] = '*';
+        tempSub[loginPassCursor] = '\0';
+        float w = MeasureTextEx(customFont, tempSub, 20, 1.0f).x;
+        if ((int)(GetTime() * 2) % 2 == 0) {
+            DrawLine(passBox.x + 12 + w, passBox.y + 10, passBox.x + 12 + w, passBox.y + 35, COLOR_ACCENT);
+        }
+    }
+
+    if (CheckCollisionPointRec(GetMousePosition(), passBox) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        activeLoginField = 2;
+        loginPassCursor = GetClickedCursorPos(loginPass, passBox, 20, GetMousePosition().x);
+    }
+
+    // Login Button
+    Rectangle btnLogin = { card.x + 40, card.y + 270, 360, 45 };
+    bool hoverLogin = CheckCollisionPointRec(GetMousePosition(), btnLogin);
+    DrawRectangleRounded(btnLogin, 0.1f, 4, hoverLogin ? COLOR_SUCCESS : COLOR_ACCENT);
+    DrawTextEx(customFont, "LOGIN", (Vector2){ btnLogin.x + 150, btnLogin.y + 12 }, 18, 1.0f, COLOR_BG);
+
+    if (strlen(loginErrorMsg) > 0) {
+        DrawTextEx(customFont, loginErrorMsg, (Vector2){ card.x + 40, card.y + 335 }, 14, 1.0f, COLOR_DANGER);
+    }
+
+    DrawTextEx(customFont, "Default: admin / 1234", (Vector2){ card.x + 100, card.y + 380 }, 13, 1.0f, COLOR_TEXT_MUTED);
+
+    if ((hoverLogin && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) || IsKeyPressed(KEY_ENTER)) {
+        if (strcmp(loginUser, "admin") == 0 && strcmp(loginPass, "1234") == 0) {
+            currentScreen = SCREEN_DASHBOARD;
+            loginErrorMsg[0] = '\0';
+            statusMsg[0] = '\0';
+        } else {
+            strcpy(loginErrorMsg, "Invalid Username or Password!");
+        }
+    }
 }
 
-// Draw button
-int DrawButton(Rectangle rect, const char *text, Color color)
-{
-    Vector2 mouse = GetMousePosition();
-
-    int hover = CheckCollisionPointRec(mouse, rect);
-
-    DrawRectangleRounded(rect, 0.18f, 8,
-                         hover ? CUSTOM_BLUE : color);
-
-    int fontSize = 18;
-    int textWidth = MeasureText(text, fontSize);
-
-    DrawText(text,
-        rect.x + (rect.width - textWidth) / 2,
-        rect.y + (rect.height - fontSize) / 2,
-        fontSize, CUSTOM_WHITE);
-
-    return hover &&
-           IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-}
-
-// Draw input field
-void DrawInput(Rectangle rect, const char *label,
-               const char *value, int field)
-{
-    DrawText(label, rect.x, rect.y - 25, 16, CUSTOM_MUTED);
-
-    DrawRectangleRounded(rect, 0.12f, 8, CUSTOM_PANEL);
-
-    DrawRectangleLinesEx(rect, 2,
-        focusedField == field ? CUSTOM_BLUE : CUSTOM_MUTED);
-
-    DrawText(value, rect.x + 12,
-             rect.y + 12, 18, CUSTOM_WHITE);
-}
-
-// Handle keyboard input
-void HandleInput(char *buffer, int maxLength, int numberOnly)
-{
+// --- DASHBOARD INPUT & DRAWING ---
+void HandleDashboardFormInput() {
     int key = GetCharPressed();
-
-    while (key > 0)
-    {
-        int valid = 0;
-
-        if (numberOnly)
-        {
-            valid = (key >= '0' && key <= '9') ||
-                    (key == '.' && strchr(buffer, '.') == NULL);
+    while (key > 0) {
+        if (activeField == 1 && strlen(rollText) < 8 && (key >= '0' && key <= '9')) {
+            InsertCharAt(rollText, &rollCursor, 8, (char)key);
+        } 
+        else if (activeField == 2 && strlen(nameText) < 40 && ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z') || key == ' ')) {
+            InsertCharAt(nameText, &nameCursorPos, 40, (char)key);
+        } 
+        else if (activeField == 3 && strlen(marksText) < 6 && ((key >= '0' && key <= '9') || key == '.')) {
+            InsertCharAt(marksText, &marksCursor, 6, (char)key);
         }
-        else
-        {
-            valid = key >= 32 && key <= 125 &&
-                    key != '|';
-        }
-
-        int len = strlen(buffer);
-
-        if (valid && len < maxLength - 1)
-        {
-            buffer[len] = (char)key;
-            buffer[len + 1] = '\0';
-        }
-
         key = GetCharPressed();
     }
 
-    if (IsKeyPressed(KEY_BACKSPACE))
-    {
-        int len = strlen(buffer);
-
-        if (len > 0)
-            buffer[len - 1] = '\0';
+    if (activeField == 1) {
+        if (IsKeyPressed(KEY_LEFT) && rollCursor > 0) rollCursor--;
+        if (IsKeyPressed(KEY_RIGHT) && rollCursor < strlen(rollText)) rollCursor++;
+        if (IsKeyPressed(KEY_BACKSPACE)) HandleBackspaceAt(rollText, &rollCursor);
+    }
+    else if (activeField == 2) {
+        if (IsKeyPressed(KEY_LEFT) && nameCursorPos > 0) nameCursorPos--;
+        if (IsKeyPressed(KEY_RIGHT) && nameCursorPos < strlen(nameText)) nameCursorPos++;
+        if (IsKeyPressed(KEY_BACKSPACE)) HandleBackspaceAt(nameText, &nameCursorPos);
+    }
+    else if (activeField == 3) {
+        if (IsKeyPressed(KEY_LEFT) && marksCursor > 0) marksCursor--;
+        if (IsKeyPressed(KEY_RIGHT) && marksCursor < strlen(marksText)) marksCursor++;
+        if (IsKeyPressed(KEY_BACKSPACE)) HandleBackspaceAt(marksText, &marksCursor);
     }
 }
 
-// Open add form
-void OpenAddForm(void)
-{
-    strcpy(formRoll, "");
-    strcpy(formName, "");
-    strcpy(formCourse, "");
-    strcpy(formMarks, "");
-    strcpy(formErrorMessage, ""); // Error reset
+void DrawDashboardScreen() {
+    DrawRectangle(0, 0, 1000, 60, COLOR_PANEL);
+    DrawTextEx(customFont, "STUDENT MANAGEMENT SYSTEM", (Vector2){ 20, 18 }, 18, 1.0f, COLOR_TEXT_LIGHT);
 
-    selectedIndex = -1;
-    editMode = 0;
-    focusedField = 0;
-    currentScreen = FORM;
-}
+    // Logout Button
+    Rectangle btnLogout = { 880, 12, 100, 36 };
+    bool hoverLogout = CheckCollisionPointRec(GetMousePosition(), btnLogout);
+    DrawRectangleRounded(btnLogout, 0.15f, 4, hoverLogout ? COLOR_DANGER : (Color){ 60, 60, 80, 255 });
+    DrawTextEx(customFont, "Logout", (Vector2){ btnLogout.x + 24, btnLogout.y + 10 }, 15, 1.0f, COLOR_TEXT_LIGHT);
 
-// Open edit form
-void OpenEditForm(void)
-{
-    if (selectedIndex < 0) return;
-
-    Student s = students[selectedIndex];
-
-    strcpy(formRoll, s.roll);
-    strcpy(formName, s.name);
-    strcpy(formCourse, s.course);
-    strcpy(formErrorMessage, ""); // Error reset
-
-    snprintf(formMarks, sizeof(formMarks), "%.2f", s.marks);
-
-    editMode = 1;
-    focusedField = 0;
-    currentScreen = FORM;
-}
-
-// Save form
-void SaveForm(void)
-{
-    strcpy(formErrorMessage, ""); // Purana error clear karein
-
-    if (strlen(formRoll) == 0 ||
-        strlen(formName) == 0 ||
-        strlen(formCourse) == 0 ||
-        strlen(formMarks) == 0)
-    {
-        strcpy(formErrorMessage, "Please fill all fields!");
+    if (hoverLogout && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        currentScreen = SCREEN_LOGIN;
+        loginUser[0] = '\0';
+        loginPass[0] = '\0';
+        ResetForm();
         return;
     }
 
-    float marks = strtof(formMarks, NULL);
+    // --- LEFT PANEL: FORM ---
+    Rectangle formPanel = { 20, 80, 340, 500 };
+    DrawRectangleRounded(formPanel, 0.05f, 4, COLOR_PANEL);
+    DrawTextEx(customFont, "Student Registration", (Vector2){ formPanel.x + 20, formPanel.y + 20 }, 18, 1.0f, COLOR_ACCENT);
 
-    if (marks < 0 || marks > 100)
-    {
-        strcpy(formErrorMessage, "Marks must be 0 to 100!");
-        return;
+    // Roll Box
+    Rectangle rBox = { formPanel.x + 20, formPanel.y + 80, 300, 40 };
+    DrawTextEx(customFont, "Roll Number:", (Vector2){ rBox.x, rBox.y - 18 }, 13, 1.0f, COLOR_TEXT_MUTED);
+    DrawRectangleRounded(rBox, 0.1f, 4, (activeField == 1) ? (Color){ 60, 60, 85, 255 } : COLOR_BG);
+    DrawRectangleRoundedLines(rBox, 0.1f, 4, (activeField == 1) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+    DrawTextEx(customFont, rollText, (Vector2){ rBox.x + 10, rBox.y + 10 }, 16, 1.0f, COLOR_TEXT_LIGHT);
+
+    if (activeField == 1) {
+        char tempSub[10];
+        strncpy(tempSub, rollText, rollCursor);
+        tempSub[rollCursor] = '\0';
+        float w = MeasureTextEx(customFont, tempSub, 16, 1.0f).x;
+        if ((int)(GetTime() * 2) % 2 == 0) {
+            DrawLine(rBox.x + 10 + w, rBox.y + 8, rBox.x + 10 + w, rBox.y + 32, COLOR_ACCENT);
+        }
+    }
+    if (CheckCollisionPointRec(GetMousePosition(), rBox) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        activeField = 1;
+        rollCursor = GetClickedCursorPos(rollText, rBox, 16, GetMousePosition().x);
     }
 
-    // Check duplicate roll number
-    for (int i = 0; i < studentCount; i++)
-    {
-        if (strcmp(students[i].roll, formRoll) == 0)
-        {
-            if (!editMode || i != selectedIndex)
-            {
-                strcpy(formErrorMessage, "Student already exists!");
-                return;
+    // Name Box
+    Rectangle nBox = { formPanel.x + 20, formPanel.y + 150, 300, 40 };
+    DrawTextEx(customFont, "Student Name:", (Vector2){ nBox.x, nBox.y - 18 }, 13, 1.0f, COLOR_TEXT_MUTED);
+    DrawRectangleRounded(nBox, 0.1f, 4, (activeField == 2) ? (Color){ 60, 60, 85, 255 } : COLOR_BG);
+    DrawRectangleRoundedLines(nBox, 0.1f, 4, (activeField == 2) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+    DrawTextEx(customFont, nameText, (Vector2){ nBox.x + 10, nBox.y + 10 }, 16, 1.0f, COLOR_TEXT_LIGHT);
+    
+    if (activeField == 2) {
+        char tempSub[50];
+        strncpy(tempSub, nameText, nameCursorPos);
+        tempSub[nameCursorPos] = '\0';
+        float w = MeasureTextEx(customFont, tempSub, 16, 1.0f).x;
+        if ((int)(GetTime() * 2) % 2 == 0) {
+            DrawLine(nBox.x + 10 + w, nBox.y + 8, nBox.x + 10 + w, nBox.y + 32, COLOR_ACCENT);
+        }
+    }
+    if (CheckCollisionPointRec(GetMousePosition(), nBox) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        activeField = 2;
+        nameCursorPos = GetClickedCursorPos(nameText, nBox, 16, GetMousePosition().x);
+    }
+
+    // Marks Box
+    Rectangle mBox = { formPanel.x + 20, formPanel.y + 220, 300, 40 };
+    DrawTextEx(customFont, "Marks (0 - 100):", (Vector2){ mBox.x, mBox.y - 18 }, 13, 1.0f, COLOR_TEXT_MUTED);
+    DrawRectangleRounded(mBox, 0.1f, 4, (activeField == 3) ? (Color){ 60, 60, 85, 255 } : COLOR_BG);
+    DrawRectangleRoundedLines(mBox, 0.1f, 4, (activeField == 3) ? COLOR_ACCENT : COLOR_TEXT_MUTED);
+    DrawTextEx(customFont, marksText, (Vector2){ mBox.x + 10, mBox.y + 10 }, 16, 1.0f, COLOR_TEXT_LIGHT);
+
+    if (activeField == 3) {
+        char tempSub[10];
+        strncpy(tempSub, marksText, marksCursor);
+        tempSub[marksCursor] = '\0';
+        float w = MeasureTextEx(customFont, tempSub, 16, 1.0f).x;
+        if ((int)(GetTime() * 2) % 2 == 0) {
+            DrawLine(mBox.x + 10 + w, mBox.y + 8, mBox.x + 10 + w, mBox.y + 32, COLOR_ACCENT);
+        }
+    }
+    if (CheckCollisionPointRec(GetMousePosition(), mBox) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        activeField = 3;
+        marksCursor = GetClickedCursorPos(marksText, mBox, 16, GetMousePosition().x);
+    }
+
+    // Form Action Buttons
+    Rectangle btnAdd = { formPanel.x + 20, formPanel.y + 280, 140, 40 };
+    Rectangle btnUpdate = { formPanel.x + 180, formPanel.y + 280, 140, 40 };
+    Rectangle btnDelete = { formPanel.x + 20, formPanel.y + 335, 140, 40 };
+    Rectangle btnClear = { formPanel.x + 180, formPanel.y + 335, 140, 40 };
+
+    DrawRectangleRounded(btnAdd, 0.1f, 4, COLOR_SUCCESS);
+    DrawTextEx(customFont, "Add Record", (Vector2){ btnAdd.x + 25, btnAdd.y + 12 }, 14, 1.0f, COLOR_BG);
+
+    DrawRectangleRounded(btnUpdate, 0.1f, 4, COLOR_ACCENT);
+    DrawTextEx(customFont, "Update", (Vector2){ btnUpdate.x + 45, btnUpdate.y + 12 }, 14, 1.0f, COLOR_BG);
+
+    DrawRectangleRounded(btnDelete, 0.1f, 4, COLOR_DANGER);
+    DrawTextEx(customFont, "Delete", (Vector2){ btnDelete.x + 45, btnDelete.y + 12 }, 14, 1.0f, COLOR_TEXT_LIGHT);
+
+    DrawRectangleRounded(btnClear, 0.1f, 4, COLOR_TEXT_MUTED);
+    DrawTextEx(customFont, "Clear Form", (Vector2){ btnClear.x + 30, btnClear.y + 12 }, 14, 1.0f, COLOR_BG);
+
+    if (strlen(statusMsg) > 0) {
+        DrawTextEx(customFont, statusMsg, (Vector2){ formPanel.x + 20, formPanel.y + 395 }, 13, 1.0f, statusColor);
+    }
+
+    // --- ADD BUTTON ---
+    if (CheckCollisionPointRec(GetMousePosition(), btnAdd) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (strlen(rollText) == 0 || strlen(nameText) == 0 || strlen(marksText) == 0) {
+            strcpy(statusMsg, "Error: Fill all fields!");
+            statusColor = COLOR_DANGER;
+        } else {
+            int roll = atoi(rollText);
+            float marks = atof(marksText);
+
+            if (marks < 0 || marks > 100) {
+                strcpy(statusMsg, "Error: Marks range (0-100)!");
+                statusColor = COLOR_DANGER;
+            } else if (IsDuplicateRoll(roll, -1)) {
+                strcpy(statusMsg, "Error: Duplicate Roll Number!");
+                statusColor = COLOR_DANGER;
+            } else if (studentCount < MAX_STUDENTS) {
+                students[studentCount].roll = roll;
+                strcpy(students[studentCount].name, nameText);
+                students[studentCount].marks = marks;
+                studentCount++;
+                SaveData();
+                ResetForm();
+                strcpy(statusMsg, "Success: Record Added!");
+                statusColor = COLOR_SUCCESS;
             }
         }
     }
 
-    if (!editMode && studentCount >= MAX_STUDENTS)
-    {
-        strcpy(formErrorMessage, "Student limit reached!");
-        return;
-    }
+    // --- UPDATE BUTTON ---
+    if (CheckCollisionPointRec(GetMousePosition(), btnUpdate) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (selectedIndex >= 0) {
+            int roll = atoi(rollText);
+            float marks = atof(marksText);
 
-    int index = editMode ? selectedIndex : studentCount;
-
-    if (index < 0 || index >= MAX_STUDENTS)
-        return;
-
-    strcpy(students[index].roll, formRoll);
-    strcpy(students[index].name, formName);
-    strcpy(students[index].course, formCourse);
-    students[index].marks = marks;
-
-    if (!editMode)
-        studentCount++;
-
-    SaveData();
-
-    selectedIndex = index;
-    currentScreen = LIST;
-    focusedField = -1;
-
-    strcpy(statusMessage,
-           editMode ? "Student updated successfully!"
-                    : "Student added successfully!");
-}
-
-// Delete selected student
-void DeleteStudent(void)
-{
-    if (selectedIndex < 0) return;
-
-    for (int i = selectedIndex; i < studentCount - 1; i++)
-    {
-        students[i] = students[i + 1];
-    }
-
-    studentCount--;
-    selectedIndex = -1;
-
-    SaveData();
-
-    strcpy(statusMessage, "Student deleted successfully!");
-}
-
-// Search matching students
-int MatchesSearch(Student s)
-{
-    if (strlen(searchText) == 0)
-        return 1;
-
-    char name[60], roll[20], search[60];
-
-    strcpy(name, s.name);
-    strcpy(roll, s.roll);
-    strcpy(search, searchText);
-
-    for (int i = 0; name[i]; i++)
-        name[i] = (char)tolower((unsigned char)name[i]);
-
-    for (int i = 0; roll[i]; i++)
-        roll[i] = (char)tolower((unsigned char)roll[i]);
-
-    for (int i = 0; search[i]; i++)
-        search[i] = (char)tolower((unsigned char)search[i]);
-
-    return strstr(name, search) != NULL ||
-           strstr(roll, search) != NULL;
-}
-
-// Draw dashboard
-void DrawDashboard(void)
-{
-    DrawText("STUDENT MANAGEMENT SYSTEM", 35, 25, 30, CUSTOM_WHITE);
-    DrawText("C LANGUAGE  |  RAYLIB PROJECT", 38, 65, 15, CUSTOM_MUTED);
-
-    // Statistics
-    DrawRectangleRounded((Rectangle){35, 100, 280, 90}, 0.12f, 8, CUSTOM_PANEL);
-    DrawText("TOTAL STUDENTS", 55, 120, 16, CUSTOM_MUTED);
-    DrawText(TextFormat("%d", studentCount), 55, 145, 30, CUSTOM_GREEN);
-
-    DrawRectangleRounded((Rectangle){335, 100, 280, 90}, 0.12f, 8, CUSTOM_PANEL);
-    DrawText("SELECTED STUDENT", 355, 120, 16, CUSTOM_MUTED);
-    DrawText(selectedIndex >= 0 ? students[selectedIndex].roll : "---", 355, 145, 25, CUSTOM_BLUE);
-
-    // Buttons
-    if (DrawButton((Rectangle){35, 215, 125, 42}, "+ Add Student", CUSTOM_BLUE))
-    {
-        OpenAddForm();
-    }
-
-    if (DrawButton((Rectangle){175, 215, 105, 42}, "Edit", CUSTOM_GREEN))
-    {
-        OpenEditForm();
-    }
-
-    if (DrawButton((Rectangle){295, 215, 105, 42}, "Delete", CUSTOM_RED))
-    {
-        DeleteStudent();
-    }
-
-    // Search box
-    Rectangle searchRect = {640, 215, 320, 42};
-    DrawText("Search:", 640, 190, 15, CUSTOM_MUTED);
-    DrawRectangleRounded(searchRect, 0.12f, 8, CUSTOM_PANEL);
-    DrawRectangleLinesEx(searchRect, 2, focusedField == 10 ? CUSTOM_BLUE : CUSTOM_MUTED);
-    DrawText(searchText, 652, 227, 18, CUSTOM_WHITE);
-
-    if (CheckCollisionPointRec(GetMousePosition(), searchRect) &&
-        IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-    {
-        focusedField = 10;
-    }
-
-    if (focusedField == 10)
-        HandleInput(searchText, sizeof(searchText), 0);
-
-    // Table heading
-    DrawRectangleRounded((Rectangle){35, 280, 925, 42}, 0.08f, 8, CUSTOM_BLUE);
-    DrawText("ROLL NO.", 50, 293, 16, CUSTOM_WHITE);
-    DrawText("STUDENT NAME", 190, 293, 16, CUSTOM_WHITE);
-    DrawText("COURSE", 485, 293, 16, CUSTOM_WHITE);
-    DrawText("MARKS", 735, 293, 16, CUSTOM_WHITE);
-    DrawText("RESULT", 850, 293, 16, CUSTOM_WHITE);
-
-    // Filtered records
-    int visible[MAX_STUDENTS];
-    int total = 0;
-
-    for (int i = 0; i < studentCount; i++)
-    {
-        if (MatchesSearch(students[i]))
-            visible[total++] = i;
-    }
-
-    int maxRows = 8;
-
-    if (scrollOffset > total - maxRows)
-        scrollOffset = total > maxRows ? total - maxRows : 0;
-
-    for (int r = 0; r < maxRows; r++)
-    {
-        int pos = r + scrollOffset;
-
-        if (pos >= total) break;
-
-        int i = visible[pos];
-        float y = 330 + r * 40;
-        Rectangle row = {35, y, 925, 36};
-
-        DrawRectangleRounded(row, 0.08f, 8,
-            selectedIndex == i ? (Color){45, 75, 115, 255}
-                               : CUSTOM_PANEL);
-
-        DrawText(students[i].roll, 50, y + 9, 15, CUSTOM_WHITE);
-        DrawText(students[i].name, 190, y + 9, 15, CUSTOM_WHITE);
-        DrawText(students[i].course, 485, y + 9, 15, CUSTOM_WHITE);
-        DrawText(TextFormat("%.2f", students[i].marks), 735, y + 9, 15, CUSTOM_WHITE);
-        DrawText(students[i].marks >= 40 ? "PASS" : "REVIEW", 850, y + 9, 15, students[i].marks >= 40 ? CUSTOM_GREEN : CUSTOM_RED);
-
-        if (CheckCollisionPointRec(GetMousePosition(), row) &&
-            IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-        {
-            selectedIndex = i;
+            if (marks < 0 || marks > 100) {
+                strcpy(statusMsg, "Error: Marks range (0-100)!");
+                statusColor = COLOR_DANGER;
+            } else if (IsDuplicateRoll(roll, selectedIndex)) {
+                strcpy(statusMsg, "Error: Roll Number exists!");
+                statusColor = COLOR_DANGER;
+            } else {
+                students[selectedIndex].roll = roll;
+                strcpy(students[selectedIndex].name, nameText);
+                students[selectedIndex].marks = marks;
+                SaveData();
+                ResetForm();
+                strcpy(statusMsg, "Success: Record Updated!");
+                statusColor = COLOR_SUCCESS;
+            }
+        } else {
+            strcpy(statusMsg, "Error: Select a record first!");
+            statusColor = COLOR_DANGER;
         }
     }
 
-    // Scroll
-    float wheel = GetMouseWheelMove();
-
-    if (wheel != 0)
-    {
-        scrollOffset -= (int)wheel;
-
-        if (scrollOffset < 0)
-            scrollOffset = 0;
-
-        if (scrollOffset > total - maxRows)
-            scrollOffset = total > maxRows ? total - maxRows : 0;
+    // --- DELETE BUTTON ---
+    if (CheckCollisionPointRec(GetMousePosition(), btnDelete) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (selectedIndex >= 0) {
+            for (int i = selectedIndex; i < studentCount - 1; i++) {
+                students[i] = students[i + 1];
+            }
+            studentCount--;
+            SaveData();
+            ResetForm();
+            strcpy(statusMsg, "Success: Record Deleted!");
+            statusColor = COLOR_SUCCESS;
+        } else {
+            strcpy(statusMsg, "Error: Select a record first!");
+            statusColor = COLOR_DANGER;
+        }
     }
 
-    DrawText(TextFormat("Showing %d of %d students", total, studentCount), 40, 665, 15, CUSTOM_MUTED);
-    DrawText(statusMessage, 400, 665, 15, CUSTOM_GREEN);
-}
-
-// Draw student form
-void DrawForm(void)
-{
-    DrawRectangleRounded((Rectangle){230, 95, 540, 580}, 0.06f, 10, CUSTOM_PANEL);
-    
-    DrawText(editMode ? "UPDATE STUDENT" : "ADD NEW STUDENT", 290, 120, 27, CUSTOM_WHITE);
-    DrawText("Enter student information below", 290, 155, 15, CUSTOM_MUTED);
-
-    // Form screen par error show karne ke liye
-    if (strlen(formErrorMessage) > 0)
-    {
-        DrawText(formErrorMessage, 290, 180, 16, CUSTOM_RED);
+    // --- CLEAR BUTTON ---
+    if (CheckCollisionPointRec(GetMousePosition(), btnClear) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        ResetForm();
+        statusMsg[0] = '\0';
     }
 
-    Rectangle roll = {290, 225, 420, 42};
-    Rectangle name = {290, 305, 420, 42};
-    Rectangle course = {290, 385, 420, 42};
-    Rectangle marks = {290, 465, 420, 42};
+    // --- RIGHT PANEL: DATA TABLE ---
+    Rectangle tablePanel = { 380, 80, 600, 500 };
+    DrawRectangleRounded(tablePanel, 0.05f, 4, COLOR_PANEL);
 
-    DrawInput(roll, "Roll Number", formRoll, 0);
-    DrawInput(name, "Student Name", formName, 1);
-    DrawInput(course, "Course", formCourse, 2);
-    DrawInput(marks, "Marks (0-100)", formMarks, 3);
+    DrawRectangleRounded((Rectangle){ tablePanel.x, tablePanel.y, tablePanel.width, 40 }, 0.05f, 4, (Color){ 50, 50, 70, 255 });
+    DrawTextEx(customFont, "Roll No", (Vector2){ tablePanel.x + 20, tablePanel.y + 12 }, 15, 1.0f, COLOR_ACCENT);
+    DrawTextEx(customFont, "Name", (Vector2){ tablePanel.x + 140, tablePanel.y + 12 }, 15, 1.0f, COLOR_ACCENT);
+    DrawTextEx(customFont, "Marks", (Vector2){ tablePanel.x + 420, tablePanel.y + 12 }, 15, 1.0f, COLOR_ACCENT);
 
-    if (CheckCollisionPointRec(GetMousePosition(), roll) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-        focusedField = 0;
+    int startY = tablePanel.y + 50;
+    for (int i = 0; i < studentCount; i++) {
+        Rectangle rowRect = { tablePanel.x + 10, startY + (i * 38), tablePanel.width - 20, 34 };
+        bool isHover = CheckCollisionPointRec(GetMousePosition(), rowRect);
 
-    if (CheckCollisionPointRec(GetMousePosition(), name) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-        focusedField = 1;
+        Color rowBg = (i == selectedIndex) ? (Color){ 0, 180, 216, 60 } : (isHover ? (Color){ 60, 60, 80, 255 } : COLOR_BG);
+        DrawRectangleRounded(rowRect, 0.08f, 4, rowBg);
 
-    if (CheckCollisionPointRec(GetMousePosition(), course) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-        focusedField = 2;
+        DrawTextEx(customFont, TextFormat("%d", students[i].roll), (Vector2){ rowRect.x + 10, rowRect.y + 8 }, 15, 1.0f, COLOR_TEXT_LIGHT);
+        DrawTextEx(customFont, students[i].name, (Vector2){ rowRect.x + 130, rowRect.y + 8 }, 15, 1.0f, COLOR_TEXT_LIGHT);
+        DrawTextEx(customFont, TextFormat("%.2f", students[i].marks), (Vector2){ rowRect.x + 410, rowRect.y + 8 }, 15, 1.0f, COLOR_TEXT_LIGHT);
 
-    if (CheckCollisionPointRec(GetMousePosition(), marks) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-        focusedField = 3;
-
-    if (focusedField == 0)
-        HandleInput(formRoll, sizeof(formRoll), 0);
-
-    if (focusedField == 1)
-        HandleInput(formName, sizeof(formName), 0);
-
-    if (focusedField == 2)
-        HandleInput(formCourse, sizeof(formCourse), 0);
-
-    if (focusedField == 3)
-        HandleInput(formMarks, sizeof(formMarks), 1);
-
-    if (DrawButton((Rectangle){290, 545, 190, 48}, "Save Student", CUSTOM_GREEN))
-    {
-        SaveForm();
-    }
-
-    if (DrawButton((Rectangle){510, 545, 200, 48}, "Cancel", CUSTOM_RED))
-    {
-        currentScreen = LIST;
-        focusedField = -1;
+        if (isHover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            selectedIndex = i;
+            sprintf(rollText, "%d", students[i].roll);
+            strcpy(nameText, students[i].name);
+            sprintf(marksText, "%.2f", students[i].marks);
+            rollCursor = strlen(rollText);
+            nameCursorPos = strlen(nameText);
+            marksCursor = strlen(marksText);
+            statusMsg[0] = '\0';
+        }
     }
 }
 
-int main(void)
-{
-    InitWindow(1000, 710, "Student Management System");
+// --- MAIN FUNCTION ---
+int main() {
+    InitWindow(1000, 600, "Student Management System - Pro Edition");
     SetTargetFPS(60);
+
+    // Load Custom Font (Make sure font.ttf is in your project folder)
+    customFont = LoadFont("font.ttf"); 
 
     LoadData();
 
-    while (!WindowShouldClose())
-    {
-        BeginDrawing();
-        ClearBackground(CUSTOM_BG);
+    while (!WindowShouldClose()) {
+        if (currentScreen == SCREEN_LOGIN) {
+            HandleLoginInput();
+        } else if (currentScreen == SCREEN_DASHBOARD) {
+            HandleDashboardFormInput();
+        }
 
-        if (currentScreen == LIST)
-            DrawDashboard();
-        else
-            DrawForm();
+        BeginDrawing();
+        ClearBackground(COLOR_BG);
+
+        if (currentScreen == SCREEN_LOGIN) {
+            DrawLoginScreen();
+        } else if (currentScreen == SCREEN_DASHBOARD) {
+            DrawDashboardScreen();
+        }
 
         EndDrawing();
     }
 
-    SaveData();
+    // Unload font and close window
+    UnloadFont(customFont);
     CloseWindow();
-
     return 0;
 }
