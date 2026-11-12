@@ -1,7 +1,7 @@
 StudentSystem.exe
 students.txt
 .vscode/
-   emscripten/
-   index.html
-   index.js
-   index.wasm
+emscripten/
+index.html
+index.js
+index.wasm
