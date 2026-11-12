@@ -27,7 +27,7 @@ jobs:
 
       - name: Build raylib for web
         run: |
-          git clone --depth 1 --branch 5.0 https://github.com/raysan5/raylib.git
+          git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git
           cd raylib/src
           make PLATFORM=PLATFORM_WEB -B
 
